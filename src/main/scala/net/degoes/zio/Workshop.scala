@@ -12,11 +12,11 @@ object ZIOTypes {
     *
     * Provide definitions for the ZIO type aliases below.
     */
-  type Task[+A] = ???
-  type UIO[+A] = ???
-  type RIO[-R, +A] = ???
-  type IO[+E, +A] = ???
-  type URIO[-R, +A] = ???
+  type Task[+A] = ZIO[Any, Throwable, A]
+  type UIO[+A] = ZIO[Any, Nothing, A]
+  type RIO[-R, +A] = ZIO[R, Throwable, A]
+  type IO[+E, +A] = ZIO[Any, E, A]
+  type URIO[-R, +A] = ZIO[R, Throwable, A]
 }
 
 object HelloWorld extends App {
@@ -29,7 +29,7 @@ object HelloWorld extends App {
     * Implement a simple "Hello World!" program using the effect returned by `putStrLn`.
     */
   def run(args: List[String]): ZIO[ZEnv, Nothing, Int] =
-    ???
+    putStrLn("Hello World!") as 0
 }
 
 object PrintSequence extends App {
@@ -43,7 +43,7 @@ object PrintSequence extends App {
     * produce an effect that prints three lines of text to the console.
     */
   def run(args: List[String]): ZIO[ZEnv, Nothing, Int] =
-    ???
+    putStrLn("Hello") *> putStrLn("World") as 0
 }
 
 object ErrorRecovery extends App {
@@ -51,7 +51,7 @@ object ErrorRecovery extends App {
 
   import zio.console._
 
-  val failed =
+  val failed: ZIO[Console, String, Unit] =
     putStrLn("About to fail...") *>
       ZIO.fail("Uh oh!") *>
       putStrLn("This will NEVER be printed!")
@@ -63,7 +63,7 @@ object ErrorRecovery extends App {
     * preceding `failed` effect into the effect that `run` returns.
     */
   def run(args: List[String]): ZIO[ZEnv, Nothing, Int] =
-    ???
+    (failed as 0) orElse ZIO.succeed(1)
 }
 
 object Looping extends App {
@@ -76,13 +76,16 @@ object Looping extends App {
     * Implement a `repeat` combinator using `flatMap` and recursion.
     */
   def repeat[R, E, A](n: Int)(effect: ZIO[R, E, A]): ZIO[R, E, A] =
-    ???
+    if (n == 1) effect
+    else effect *> repeat(n - 1)(effect)
 
   def run(args: List[String]): ZIO[ZEnv, Nothing, Int] =
-    repeat(100)(putStrLn("All work and no play makes Jack a dull boy")) as 0
+    repeat(10)(putStrLn("All work and no play makes Jack a dull boy")) as 0
 }
 
 object EffectConversion extends App {
+
+  import zio.console.Console
 
   /**
     * EXERCISE
@@ -90,10 +93,12 @@ object EffectConversion extends App {
     * Using ZIO.effect, convert the side-effecting of `println` into a pure
     * functional effect.
     */
-  def myPrintLn(line: String): Task[Unit] = UIO(println(line))
+  def myPrintLn(line: String): Task[Unit] = ZIO.effect {
+    println(line)
+  }
 
-  def run(args: List[String]) =
-    ???
+  def run(args: List[String]): ZIO[Console, Nothing, Int] =
+    myPrintLn("Hello") as 0 orElse ZIO.succeed(1)
 }
 
 object ErrorNarrowing extends App {
@@ -101,17 +106,13 @@ object ErrorNarrowing extends App {
   import java.io.IOException
   import scala.io.StdIn.readLine
 
-  implicit class Unimplemented[A](v: A) {
-    def ? = ???
-  }
-
   /**
     * EXERCISE
     *
     * Using `ZIO#refineToOrDie`, narrow the error type of the following
     * effect to IOException.
     */
-  val myReadLine: IO[IOException, String] = ???
+  val myReadLine: IO[IOException, String] = ZIO.effect(readLine()).refineToOrDie[IOException]
 
   def myPrintLn(line: String): UIO[Unit] = UIO(println(line))
 
@@ -119,7 +120,7 @@ object ErrorNarrowing extends App {
     (for {
       _ <- myPrintLn("What is your name?")
       name <- myReadLine
-      _ <- myPrintLn(s"Good to meet you, ${name}")
+      _ <- myPrintLn(s"Good to meet you, $name")
     } yield 0) orElse ZIO.succeed(1)
 }
 
@@ -135,7 +136,8 @@ object PromptName extends App {
     * their name (using `getStrLn`), and then prints it out to the user (using `putStrLn`).
     */
   def run(args: List[String]): ZIO[ZEnv, Nothing, Int] =
-    ???
+    putStrLn("What is your name?") *>
+      getStrLn.flatMap(name => putStrLn(s"Hello $name!")).fold(_ => 1, _ => 0)
 }
 
 object NumberGuesser extends App {
