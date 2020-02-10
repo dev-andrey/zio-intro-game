@@ -1,8 +1,10 @@
 package net.degoes.zio
 
+import java.io.FileInputStream
+
 import zio._
-import java.text.NumberFormat
-import java.nio.charset.StandardCharsets
+
+import scala.io.Source
 
 object ZIOTypes {
   type ??? = Nothing
@@ -104,6 +106,7 @@ object EffectConversion extends App {
 object ErrorNarrowing extends App {
 
   import java.io.IOException
+
   import scala.io.StdIn.readLine
 
   /**
@@ -145,9 +148,9 @@ object NumberGuesser extends App {
   import zio.console._
   import zio.random._
 
-  def analyzeAnswer(random: Int, guess: String) =
+  def analyzeAnswer(random: Int, guess: String): ZIO[Console, Nothing, Unit] =
     if (random.toString == guess.trim) putStrLn("You guessed correctly!")
-    else putStrLn(s"You did not guess correctly. The answer was ${random}")
+    else putStrLn(s"You did not guess correctly. The answer was $random")
 
   /**
     * EXERCISE
@@ -156,15 +159,20 @@ object NumberGuesser extends App {
     * the number, feeding their response to `analyzeAnswer`, above.
     */
   def run(args: List[String]): ZIO[ZEnv, Nothing, Int] =
-    ???
+    (for {
+      random <- nextInt(10)
+      guess <- getStrLn
+      _ <- analyzeAnswer(random, guess)
+    } yield 0) orElse ZIO.succeed(1)
 }
 
 object AlarmApp extends App {
 
-  import zio.console._
-  import zio.duration._
   import java.io.IOException
   import java.util.concurrent.TimeUnit
+
+  import zio.console._
+  import zio.duration._
 
   /**
     * EXERCISE
@@ -175,10 +183,12 @@ object AlarmApp extends App {
     */
   lazy val getAlarmDuration: ZIO[Console, IOException, Duration] = {
     def parseDuration(input: String): IO[NumberFormatException, Duration] =
-      ???
+      ZIO.effect {
+        Duration(input.toLong, TimeUnit.SECONDS)
+      }.refineToOrDie[NumberFormatException]
 
     def fallback(input: String): ZIO[Console, IOException, Duration] =
-      ???
+      putStrLn("You didn't enter number of seconds") *> getAlarmDuration
 
     for {
       _ <- putStrLn("Please enter the number of seconds to sleep: ")
@@ -195,14 +205,19 @@ object AlarmApp extends App {
     * prints out a wakeup alarm message, like "Time to wakeup!!!".
     */
   def run(args: List[String]): ZIO[ZEnv, Nothing, Int] =
-    ???
+    (for {
+      duration <- getAlarmDuration
+      _ <- ZIO.sleep(duration)
+      _ <- putStrLn("Time to wake up!!!")
+    } yield 0) orElse ZIO.succeed(1)
 }
 
 object Cat extends App {
 
-  import zio.console._
-  import zio.blocking._
   import java.io.IOException
+
+  import zio.blocking._
+  import zio.console._
 
   /**
     * EXERCISE
@@ -211,7 +226,10 @@ object Cat extends App {
     * the result into a string.
     */
   def readFile(file: String): ZIO[Blocking, IOException, String] =
-    ???
+    effectBlocking {
+      val source = Source.fromFile(file)
+      try source.mkString finally source.close()
+    }.refineToOrDie[IOException]
 
   /**
     * EXERCISE
@@ -220,16 +238,18 @@ object Cat extends App {
     * contents of the specified file to standard output.
     */
   def run(args: List[String]): ZIO[ZEnv, Nothing, Int] =
-    ???
+    (for {
+      content <- readFile(args.head)
+      _ <- putStrLn(content)
+    } yield 0) catchAllCause (err => putStrLn(err.prettyPrint) as 1)
 }
-
 
 object SourceManaged extends App {
 
-  import zio.console._
-  import zio.blocking._
-  import zio.duration._
   import java.io.IOException
+
+  import zio.blocking._
+  import zio.console._
 
   import scala.io.Source
 
@@ -247,14 +267,16 @@ object SourceManaged extends App {
       */
     def make(file: String): ZManaged[Blocking, IOException, ZioSource] = {
       // An effect that acquires the resource:
-      val open = effectBlocking(new ZioSource(Source.fromFile(file))).refineToOrDie[IOException]
+      val open = effectBlocking {
+        new ZioSource(Source.fromFile(file))
+      }.refineToOrDie[IOException]
 
       // A function that, when given the resource, returns an effect that 
       // releases the resource:
       val close: ZioSource => ZIO[Blocking, Nothing, Unit] =
       _.execute(_.close()).orDie
 
-      ???
+      ZManaged.make(open)(close)
     }
   }
 
@@ -264,8 +286,18 @@ object SourceManaged extends App {
     * Implement a function to read a file on the blocking thread pool, storing
     * the result into a string.
     */
-  def readFiles(files: List[String]): ZIO[Blocking with Console, IOException, Unit] =
-    ???
+  def readFiles(files: List[String]): ZIO[Blocking with Console, IOException, Unit] = {
+    def read(file: String) = {
+      for {
+        content <- ZioSource.make(file).use {
+          zSrc => zSrc.execute(src => src.mkString)
+        }
+        _ <- putStrLn(content)
+      } yield ()
+    }
+
+    ZIO.foreachPar_(files)(read)
+  }
 
   /**
     * EXERCISE
@@ -276,14 +308,15 @@ object SourceManaged extends App {
     * anything except an error message.
     */
   def run(args: List[String]): ZIO[ZEnv, Nothing, Int] =
-    ???
+    readFiles(args).catchAllCause(err => putStrLn(err.prettyPrint) as 1) as 0
 }
 
 object CatIncremental extends App {
 
-  import zio.console._
+  import java.io.{IOException, InputStream}
+
   import zio.blocking._
-  import java.io.{IOException, InputStream, FileInputStream}
+  import zio.console._
 
   /**
     * BONUS EXERCISE
@@ -291,7 +324,7 @@ object CatIncremental extends App {
     * Implement a `blockingIO` combinator to use in subsequent exercises.
     */
   def blockingIO[A](a: => A): ZIO[Blocking, IOException, A] =
-    ???
+    effectBlocking(a).refineToOrDie[IOException]
 
   /**
     * EXERCISE
@@ -300,19 +333,30 @@ object CatIncremental extends App {
     * the blocking thread pool.
     */
   final case class FileHandle private(private val is: InputStream) {
-    final def close: ZIO[Blocking, IOException, Unit] = ???
+    def close: ZIO[Blocking, IOException, Unit] =
+      blockingIO(is.close())
 
-    final def read: ZIO[Blocking, IOException, Option[Chunk[Byte]]] =
-      ???
+    def read: ZIO[Blocking, IOException, Option[Chunk[Byte]]] =
+      blockingIO {
+        val buf = Array.ofDim[Byte](64)
+        val count = is.read(buf)
+        if (count > -1) Some(Chunk.fromArray(buf.take(count)))
+        else None
+      }
   }
 
   object FileHandle {
     final def open(file: String): ZIO[Blocking, IOException, FileHandle] =
-      ???
+      blockingIO(FileHandle(new FileInputStream(file)))
   }
 
   def cat(fh: FileHandle): ZIO[Blocking with Console, IOException, Unit] =
-    ???
+    for {
+      _ <- fh.read.flatMap {
+        case Some(chunk) => putStr(new String(chunk.toArray)) *> cat(fh)
+        case _ => ZIO.unit
+      }
+    } yield ()
 
   /**
     * EXERCISE
@@ -333,10 +377,11 @@ object CatIncremental extends App {
 
 object AlarmAppImproved extends App {
 
-  import zio.console._
-  import zio.duration._
   import java.io.IOException
   import java.util.concurrent.TimeUnit
+
+  import zio.console._
+  import zio.duration._
 
   lazy val getAlarmDuration: ZIO[Console, IOException, Duration] = {
     def parseDuration(input: String): IO[NumberFormatException, Duration] =
@@ -364,16 +409,18 @@ object AlarmAppImproved extends App {
     * prints out a wakeup alarm message, like "Time to wakeup!!!".
     */
   def run(args: List[String]): ZIO[ZEnv, Nothing, Int] =
-    ???
+    (for {
+      duration <- getAlarmDuration
+      fiber <- putStr(".").repeat(Schedule.spaced(1 second)).fork
+      _ <- ZIO.sleep(duration) *> fiber.interrupt
+      _ <- putStrLn("Time to wakeup!!!")
+    } yield 0).catchAllCause(err => putStrLn(err.prettyPrint) as 1)
+
 }
 
 object ComputePi extends App {
 
   import zio.random._
-  import zio.console._
-  import zio.clock._
-  import zio.duration._
-  import zio.stm._
 
   /**
     * Some state to keep track of all points inside a circle,
@@ -506,6 +553,7 @@ object StmQueue extends App {
 
   import zio.console._
   import zio.stm._
+
   import scala.collection.immutable.{Queue => ScalaQueue}
 
   /**
@@ -533,7 +581,6 @@ object StmQueue extends App {
 
 object StmLunchTime extends App {
 
-  import zio.console._
   import zio.stm._
 
   /**
@@ -542,8 +589,6 @@ object StmLunchTime extends App {
     * Using STM, implement the missing methods of Attendee.
     */
   final case class Attendee(state: TRef[Attendee.State]) {
-
-    import Attendee.State._
 
     def isStarving: STM[Nothing, Boolean] = ???
 
@@ -617,7 +662,7 @@ object StmLunchTime extends App {
       )
       table <- TArray
         .fromIterable(List.fill(TableSize)(false))
-        .map(Table(_))
+        .map(Table)
         .commit
       _ <- feedStarving(table, attendees)
     } yield 0
@@ -627,8 +672,8 @@ object StmLunchTime extends App {
 object StmPriorityQueue extends App {
 
   import zio.console._
-  import zio.stm._
   import zio.duration._
+  import zio.stm._
 
   /**
     * EXERCISE
@@ -673,25 +718,24 @@ object StmPriorityQueue extends App {
 
 object StmReentrantLock extends App {
 
-  import zio.console._
   import zio.stm._
 
   private final case class WriteLock(
                                       writeCount: Int,
                                       readCount: Int,
-                                      fiberId: FiberId
+                                      fiberId: Fiber.Id
                                     )
 
   private final class ReadLock private(readers: Map[Fiber.Id, Int]) {
     def total: Int = readers.values.sum
 
-    def noOtherHolder(fiberId: FiberId): Boolean =
-      readers.size == 0 || (readers.size == 1 && readers.contains(fiberId))
+    def noOtherHolder(fiberId: Fiber.Id): Boolean =
+      readers.isEmpty || (readers.size == 1 && readers.contains(fiberId))
 
-    def readLocks(fiberId: FiberId): Int =
+    def readLocks(fiberId: Fiber.Id): Int =
       readers.get(fiberId).fold(0)(identity)
 
-    def adjust(fiberId: FiberId, adjust: Int): ReadLock = {
+    def adjust(fiberId: Fiber.Id, adjust: Int): ReadLock = {
       val total = readLocks(fiberId)
 
       val newTotal = total + adjust
@@ -811,7 +855,6 @@ object StmDiningPhilosophers extends App {
 object SimpleActor extends App {
 
   import zio.console._
-  import zio.stm._
 
   sealed trait Command
 
@@ -873,7 +916,6 @@ object Sharding extends App {
 
 object CustomEnvironment extends App {
 
-  import zio.console._
   import java.io.IOException
 
   type MyFx = Logging with Files
@@ -922,10 +964,10 @@ object CustomEnvironment extends App {
 
 object Hangman extends App {
 
-  import Dictionary.Dictionary
+  import java.io.IOException
+
   import zio.console._
   import zio.random._
-  import java.io.IOException
 
   /**
     * EXERCISE
@@ -1064,13 +1106,13 @@ object TicTacToe extends App {
     /**
       * Retrieves the mark at the specified row/col.
       */
-    final def get(row: Int, col: Int): Option[Mark] =
+    def get(row: Int, col: Int): Option[Mark] =
       value.lift(row).flatMap(_.lift(col)).flatten
 
     /**
       * Places a mark on the board at the specified row/col.
       */
-    final def place(row: Int, col: Int, mark: Mark): Option[Board] =
+    def place(row: Int, col: Int, mark: Mark): Option[Board] =
       if (row >= 0 && col >= 0 && row < 3 && col < 3)
         Some(
           copy(value = value.updated(row, value(row).updated(col, Some(mark))))
@@ -1088,7 +1130,7 @@ object TicTacToe extends App {
     /**
       * Returns which mark won the game, if any.
       */
-    final def won: Option[Mark] =
+    def won: Option[Mark] =
       if (wonBy(Mark.X)) Some(Mark.X)
       else if (wonBy(Mark.O)) Some(Mark.O)
       else None
