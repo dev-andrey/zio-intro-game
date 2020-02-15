@@ -426,6 +426,8 @@ object AlarmAppImproved extends App {
 object ComputePi extends App {
 
   import zio.random._
+  import zio.console._
+  import zio.duration._
 
   /**
    * Some state to keep track of all points inside a circle,
@@ -455,6 +457,22 @@ object ComputePi extends App {
   val randomPoint: ZIO[Random, Nothing, (Double, Double)] =
     nextDouble zip nextDouble
 
+  def updateOnce(state: PiState): ZIO[Random, Nothing, Unit] =
+    for {
+      tuple  <- randomPoint
+      (x, y) = tuple
+      inside = if (insideCircle(x, y)) 1 else 0
+      _      <- state.total.update(_ + 1)
+      _      <- state.inside.update(_ + inside)
+    } yield ()
+
+  def printEstimate(state: PiState): ZIO[Console, Nothing, Unit] =
+    for {
+      inside <- state.inside.get
+      total  <- state.total.get
+      _      <- putStrLn(s"${estimatePi(inside, total)}")
+    } yield ()
+
   /**
    * EXERCISE
    *
@@ -462,7 +480,17 @@ object ComputePi extends App {
    * ongoing estimates continuously until the estimation is complete.
    */
   def run(args: List[String]): ZIO[ZEnv, Nothing, Int] =
-    ???
+    (for {
+      inside  <- Ref.make(0L)
+      total   <- Ref.make(0L)
+      state   = PiState(inside, total)
+      worker  = updateOnce(state).forever
+      workers = List.fill(4)(worker)
+      fiber1  <- ZIO.forkAll(workers)
+      fiber2  <- (printEstimate(state) *> ZIO.sleep(1 second)).forever.fork
+      _       <- putStrLn("Press any key to terminate....")
+      _       <- getStrLn *> (fiber1 zip fiber2).interrupt
+    } yield 0) orElse ZIO.succeed(1)
 }
 
 object StmSwap extends App {
