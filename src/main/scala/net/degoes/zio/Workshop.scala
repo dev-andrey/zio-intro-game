@@ -504,7 +504,7 @@ object StmSwap extends App {
    * Demonstrate the following code does not reliably swap two values in the
    * presence of concurrency.
    */
-  def exampleRef = {
+  def exampleRef: ZIO[Any, Nothing, Int] = {
     def swap[A](ref1: Ref[A], ref2: Ref[A]): UIO[Unit] =
       for {
         v1 <- ref1.get
@@ -528,9 +528,16 @@ object StmSwap extends App {
    *
    * Using `STM`, implement a safe version of the swap function.
    */
-  def exampleStm = {
+  def exampleStm: ZIO[Any, Nothing, Int] = {
     def swap[A](ref1: TRef[A], ref2: TRef[A]): UIO[Unit] =
-      ???
+      STM.atomically {
+        for {
+          v1 <- ref1.get
+          v2 <- ref2.get
+          _  <- ref1.set(v2)
+          _  <- ref2.set(v1)
+        } yield ()
+      }
 
     for {
       ref1   <- TRef.make(100).commit
@@ -558,13 +565,30 @@ object StmLock extends App {
    * acquisition, and release methods.
    */
   class Lock private (tref: TRef[Boolean]) {
-    def acquire: UIO[Unit] = ???
 
-    def release: UIO[Unit] = ???
+    def acquire: UIO[Unit] =
+      STM.atomically {
+        for {
+          locked <- tref.get
+          _      <- STM.check(!locked)
+          _      <- tref.set(!locked)
+        } yield ()
+      }
+
+    def release: UIO[Unit] =
+      STM.atomically {
+        for {
+          locked <- tref.get
+          _      <- STM.check(locked)
+          _      <- tref.set(!locked)
+        } yield ()
+      }
   }
 
   object Lock {
-    def make: UIO[Lock] = ???
+
+    def make: UIO[Lock] =
+      TRef.makeCommit(false).map(new Lock(_))
   }
 
   def run(args: List[String]): ZIO[ZEnv, Nothing, Int] =
