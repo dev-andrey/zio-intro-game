@@ -618,21 +618,40 @@ object StmQueue extends App {
    *
    * Using STM, implement a async queue with double back-pressuring.
    */
-  class Queue[A] private (capacity: Int, queue: TRef[ScalaQueue[A]]) {
-    def take: UIO[A] = ???
+  class Queue[A] private (capacity: Int, queueRef: TRef[ScalaQueue[A]]) {
 
-    def offer(a: A): UIO[Unit] = ???
+    def take: UIO[A] =
+      STM.atomically {
+        for {
+          q <- queueRef.get
+          a <- q.dequeueOption match {
+                case Some((a, as)) => queueRef.set(as) *> STM.succeed(a)
+                case _             => STM.retry
+              }
+        } yield a
+      }
+
+    def offer(a: A): UIO[Unit] =
+      STM.atomically {
+        for {
+          q <- queueRef.get
+          _ <- STM.check(q.length < capacity)
+          _ <- queueRef.update(_ enqueue a)
+        } yield ()
+      }
   }
 
   object Queue {
-    def make[A]: UIO[Queue[A]] = ???
+
+    def make[A]: UIO[Queue[A]] =
+      TRef.make(ScalaQueue.empty[A]).commit.map(new Queue(5, _))
   }
 
   def run(args: List[String]): ZIO[ZEnv, Nothing, Int] =
     for {
       queue <- Queue.make[Int]
       _     <- ZIO.foreach(0 to 100)(i => queue.offer(i)).fork
-      _     <- ZIO.foreach(0 to 100)(_ => queue.take.flatMap(i => putStrLn(s"Got: ${i}")))
+      _     <- ZIO.foreach(0 to 100)(_ => queue.take.flatMap(i => putStrLn(s"Got: $i")))
     } yield 0
 }
 
